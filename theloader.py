@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from PIL import Image, ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -232,14 +232,96 @@ class Item:
 
 
 def extract_category(soup: BeautifulSoup, page_url: str, args) -> str:
+    return find_category(soup, page_url, args)[0]
+
+
+NAV_CLASS = re.compile(r"(^|[-_ ])(nav|navbar|menu|header|footer|mega)([-_ ]|$)", re.I)
+
+
+def _in_navigation(el) -> bool:
+    """True if the element sits in the site menu / header / footer (same on every page)."""
+    for p in [el] + list(el.parents):
+        if getattr(p, "name", None) in ("nav", "header", "footer"):
+            return True
+        if getattr(p, "attrs", None):
+            cls = " ".join(p.get("class", [])) + " " + (p.get("id") or "")
+            if NAV_CLASS.search(cls) or p.get("role") == "navigation":
+                return True
+    return False
+
+
+def _norm_label(t: str) -> str:
+    t = (t or "").replace("\u200c", " ").replace("\xa0", " ")
+    return re.sub(r"\s+", " ", t).strip().strip(":：-–|").strip().lower()
+
+
+def _clean_value(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "").replace("\xa0", " ")).strip().strip(":：-–|،,").strip()
+
+
+def _value_after(node, labels: set[str]) -> str | None:
+    """The first non-empty text that follows a label like 'Category:'."""
+    cur = node
+    for _ in range(4):
+        for sib in cur.next_siblings:
+            if isinstance(sib, Tag):
+                if sib.name in ("script", "style"):
+                    continue
+                link = sib.find("a") if sib.name != "a" else None
+                txt = _clean_value(link.get_text(" ", strip=True) if link and link.get_text(strip=True)
+                                   else sib.get_text(" ", strip=True))
+            else:
+                txt = _clean_value(str(sib))
+            if txt and _norm_label(txt) not in labels:
+                return txt if len(txt) <= 60 else None
+        cur = cur.parent
+        if cur is None or cur.name in ("body", "html", "[document]"):
+            break
+    return None
+
+
+def find_category(soup: BeautifulSoup, page_url: str, args) -> tuple[str, str]:
+    """Return (category, how it was found)."""
     # 1) user-supplied CSS selector wins
     if args.category_selector:
         els = soup.select(args.category_selector)
         texts = [e.get_text(" ", strip=True) for e in els if e.get_text(strip=True)]
         if texts:
-            return " - ".join(texts) if args.category_join else texts[0]
+            return (" - ".join(texts) if args.category_join else texts[0]), f"selector {args.category_selector!r}"
 
-    # 2) JSON-LD BreadcrumbList
+    # 2) a labelled field on the page:  "Category: Stone", <dt>Category</dt><dd>Stone</dd>, ...
+    labels = {_norm_label(l) for l in args.category_label.split(",") if l.strip()}
+    for node in soup.find_all(string=True):
+        parent = node.parent
+        if parent is None or parent.name in ("script", "style", "title", "option", "noscript"):
+            continue
+        t = _norm_label(str(node))
+        if not t:
+            continue
+        value = None
+        if t in labels:
+            if _in_navigation(parent):
+                continue
+            value = _value_after(node, labels)
+        else:
+            m = re.match(r"^\s*([^:：]{1,30})[:：]\s*(.+)$", str(node).replace("\u200c", " "))
+            if m and _norm_label(m.group(1)) in labels and not _in_navigation(parent):
+                value = _clean_value(m.group(2))
+                if len(value) > 60:
+                    value = None
+        if value:
+            return value, f"label {(t if t in labels else _norm_label(t.split(':')[0]))!r} on the page"
+
+    # 3) an element whose class / id says "category" (outside the menu)
+    for el in soup.select('[class*="category" i], [id*="category" i], [itemprop="category"]'):
+        if el.name in ("body", "html") or _in_navigation(el):
+            continue
+        link = el.find("a")
+        txt = _clean_value((link or el).get_text(" ", strip=True))
+        if txt and len(txt) <= 60 and _norm_label(txt) not in labels:
+            return txt, "element with class/id 'category'"
+
+    # 4) JSON-LD BreadcrumbList
     for s in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(s.string or "")
@@ -258,38 +340,36 @@ def extract_category(soup: BeautifulSoup, page_url: str, args) -> str:
                             names.append(nm)
                     cat = _cat_from_crumbs(names)
                     if cat:
-                        return cat
+                        return cat, "JSON-LD breadcrumb"
                 stack.extend(v for v in d.values() if isinstance(v, (dict, list)))
-                if "@graph" in d and isinstance(d["@graph"], list):
-                    stack.extend(d["@graph"])
             elif isinstance(d, list):
                 stack.extend(d)
 
-    # 3) HTML breadcrumb
+    # 5) HTML breadcrumb
     crumb = soup.select_one('[aria-label*="breadcrumb" i], .breadcrumb, .breadcrumbs, '
                             '#breadcrumb, #breadcrumbs, [class*="breadcrumb"], [itemtype*="BreadcrumbList"]')
     if crumb:
         names = [a.get_text(" ", strip=True) for a in crumb.find_all(["a", "span", "li"]) if a.get_text(strip=True)]
-        # de-duplicate li/a/span nesting
         uniq = []
         for n in names:
             if not uniq or uniq[-1] != n:
                 uniq.append(n)
         cat = _cat_from_crumbs(uniq)
         if cat:
-            return cat
+            return cat, "breadcrumb"
 
-    # 4) a link whose URL looks like a category link
+    # 6) a category-looking link outside the site menu
     pat = re.compile(args.category_link_pattern, re.I)
     for a in soup.find_all("a", href=True):
-        if pat.search(urlparse(urljoin(page_url, a["href"])).path) and a.get_text(strip=True):
-            return a.get_text(" ", strip=True)
+        if pat.search(urlparse(urljoin(page_url, a["href"])).path) and a.get_text(strip=True) \
+                and not _in_navigation(a):
+            return a.get_text(" ", strip=True), f"category link {a['href']}"
 
-    # 5) meta tag article:section
+    # 7) meta tag article:section
     m = soup.find("meta", attrs={"property": "article:section"})
     if m and m.get("content"):
-        return m["content"]
-    return "uncategorized"
+        return m["content"], "meta article:section"
+    return "uncategorized", "nothing found"
 
 
 def _cat_from_crumbs(names: list[str]) -> str:
@@ -595,8 +675,9 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
         stats["failed"] += 1
         return stats
     soup = BeautifulSoup(html, "html.parser")
+    category, cat_how = find_category(soup, url, args)
     item = Item(page_url=url, item_id=item_id_from_url(url, item_re) or "",
-                title=extract_title(soup), category=extract_category(soup, url, args))
+                title=extract_title(soup), category=category)
     if args.only_category and not category_matches(item.category, args.only_category):
         return stats
     item.candidates = extract_candidates(soup, url, args)
@@ -624,7 +705,7 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
         log(f"\n=== {url}")
         log(f"  id       : {item.item_id}")
         log(f"  title    : {item.title}")
-        log(f"  category : {item.category}")
+        log(f"  category : {item.category}   (found by: {cat_how})")
         log(f"  {len(item.candidates)} image candidates on page:")
         for final, w, h, c in sorted(found, key=lambda f: -f[1] * f[2]):
             ok = "KEEP " if (final, w, h, c) in big else "small"
@@ -885,6 +966,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-upgrade", action="store_true", help="don't try to guess bigger versions of URLs")
     g = p.add_argument_group("categories")
     g.add_argument("--category-selector", help="CSS selector of the category text, e.g. '.texture-category a'")
+    g.add_argument("--category-label", default="category,categories,cat,دسته,دسته بندی,دسته‌بندی,دسته بندی ها,دسته‌ها",
+                   help="words that label the category field on the page, comma separated "
+                        "(default: category, دسته‌بندی, ...)")
     g.add_argument("--category-join", action="store_true",
                    help="if the selector matches several elements, join them (e.g. 'Stone - Marble')")
     g.add_argument("--category-link-pattern", default=r"/(category|categories|cat|textures?/category|collection)s?/",

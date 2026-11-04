@@ -140,7 +140,18 @@ python theloader.py https://YOUR-SITE.com --from-scan downloads/scan.csv --only-
 
 ## تنظیم برای سایت خودتان
 
-اگر دسته‌بندی درست تشخیص داده نشد، انتخابگر CSS آن را بدهید:
+ابزار دسته‌بندی را به این ترتیب پیدا می‌کند:
+
+1. بخشی از صفحه که برچسب **Category** یا **دسته‌بندی** دارد، مثل `Category: Stone`، یا جدول و فهرستی با همین عنوان
+2. عنصری که کلاس یا id آن `category` باشد
+3. breadcrumb
+4. لینک‌های دسته‌بندی
+
+منوی بالا، هدر و فوتر سایت نادیده گرفته می‌شوند. در حالت `--probe` کنار هر دسته‌بندی نوشته می‌شود از کجا پیدا شده (`found by: ...`).
+
+اگر روی صفحه به‌جای Category کلمه‌ی دیگری نوشته شده، آن را بدهید، مثلاً `--category-label "Material,Type"`.
+
+اگر دسته‌بندی باز هم درست تشخیص داده نشد، انتخابگر CSS آن را بدهید:
 
 ```bash
 python theloader.py https://YOUR-SITE.com --ids 1-3 --probe --category-selector ".texture-category a"
