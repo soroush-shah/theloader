@@ -84,6 +84,43 @@ python theloader.py https://YOUR-SITE.com --crawl
 
 شماره‌هایی که صفحه ندارند فقط با پیام `✗ page not available` رد می‌شوند و مشکلی ایجاد نمی‌کنند.
 
+## بررسی سایت قبل از دانلود (`--scan`)
+
+این حالت هیچ عکسی دانلود نمی‌کند. فقط صفحه‌ها را باز می‌کند و گزارش می‌دهد:
+
+- کدام شماره‌ها (ID) فعال‌اند
+- سایت در کل چند تکسچر دارد
+- هر دسته‌بندی در کدام بازه‌ی شماره‌ها قرار دارد
+
+```bash
+python theloader.py https://YOUR-SITE.com --scan
+```
+
+بدون `--ids`، بررسی از شماره‌ی ۱ شروع می‌شود و بعد از ۵۰۰ شماره‌ی خالی پشت سر هم متوقف می‌شود. این عدد با `--scan-gap` قابل تغییر است. می‌توانید بازه را خودتان هم بدهید: `--scan --ids 1-5000`.
+
+نمونه‌ی خروجی:
+
+```
+Checked IDs : 3500
+Active IDs  : 2871
+Lowest / highest active ID: 1 / 3120
+
+Categories (4):
+  Concrete     806 textures   IDs: 1-820
+  Stone        907 textures   IDs: 821-1700, 2900-3120
+  Wood         528 textures   IDs: 1701, 1703, ... (spread over 1701-2899)
+```
+
+نتیجه در دو فایل ذخیره می‌شود: `scan.csv` (فهرست کامل شماره‌ها، دسته‌بندی و عنوان) و `scan_summary.txt` (همین گزارش).
+
+بعد از بررسی، می‌توانید فقط صفحه‌های فعال، یا فقط یک دسته‌بندی، را دانلود کنید:
+
+```bash
+python theloader.py https://YOUR-SITE.com --from-scan downloads/scan.csv --only-category "Stone"
+```
+
+`--only-category` بدون `--from-scan` هم کار می‌کند، با `--ids` یا `--crawl`. اسم چند دسته را می‌شود با ویرگول جدا کرد: `"Stone,Concrete"`.
+
 ## گزینه‌های مهم
 
 | گزینه | کار |

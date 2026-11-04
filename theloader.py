@@ -597,6 +597,8 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
     soup = BeautifulSoup(html, "html.parser")
     item = Item(page_url=url, item_id=item_id_from_url(url, item_re) or "",
                 title=extract_title(soup), category=extract_category(soup, url, args))
+    if args.only_category and not category_matches(item.category, args.only_category):
+        return stats
     item.candidates = extract_candidates(soup, url, args)
 
     found = []
@@ -673,6 +675,167 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
     return stats
 
 
+
+# --------------------------------------------------------------------------- #
+# Scan: which IDs exist, and which category lives in which ID range
+# --------------------------------------------------------------------------- #
+
+def category_matches(category: str, wanted: str) -> bool:
+    names = [w.strip().lower() for w in wanted.split(",") if w.strip()]
+    return (category or "").strip().lower() in names
+
+
+def scan_page(url: str, http: Http, args, item_re, renderer) -> dict:
+    row = {"id": item_id_from_url(url, item_re) or "", "url": url, "status": "", "category": "", "title": ""}
+    if renderer:
+        html = renderer.html(url)
+        row["status"] = "active" if html else "missing"
+    else:
+        r = http.get(url)
+        if r is None:
+            row["status"] = "error"
+            return row
+        if r.status_code != 200:
+            row["status"] = "missing" if r.status_code in (404, 410) else f"http {r.status_code}"
+            return row
+        if "html" not in r.headers.get("Content-Type", "html"):
+            row["status"] = "not html"
+            return row
+        # a "missing" texture often redirects to the home page or a list page
+        if r.url != url and not item_re.search(urlparse(r.url).path):
+            row["status"] = "redirect"
+            return row
+        r.encoding = r.encoding if r.encoding and r.encoding.lower() != "iso-8859-1" else r.apparent_encoding
+        html = r.text
+        row["status"] = "active"
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        row["title"] = extract_title(soup)
+        row["category"] = extract_category(soup, url, args)
+    return row
+
+
+def _id_key(row):
+    return (0, int(row["id"]), "") if str(row["id"]).isdigit() else (1, 0, str(row["id"]))
+
+
+def _ranges(nums: list[int]) -> list[tuple[int, int]]:
+    out = []
+    for n in sorted(nums):
+        if out and n == out[-1][1] + 1:
+            out[-1] = (out[-1][0], n)
+        else:
+            out.append((n, n))
+    return out
+
+
+def _fmt_ranges(rs: list[tuple[int, int]], max_show: int = 12) -> str:
+    parts = [f"{a}" if a == b else f"{a}-{b}" for a, b in rs]
+    if len(parts) > max_show:
+        return ", ".join(parts[:max_show]) + f", ... (+{len(parts) - max_show} more)"
+    return ", ".join(parts)
+
+
+def scan_report(rows: list[dict]) -> str:
+    active = sorted([r for r in rows if r["status"] == "active"], key=_id_key)
+    lines = [f"Checked IDs : {len(rows)}",
+             f"Active IDs  : {len(active)}",
+             f"Not active  : {len(rows) - len(active)}"]
+    num_active = [int(r["id"]) for r in active if str(r["id"]).isdigit()]
+    if num_active:
+        lines.append(f"Lowest / highest active ID: {min(num_active)} / {max(num_active)}")
+        lines.append(f"Active ID ranges: {_fmt_ranges(_ranges(num_active))}")
+    other = {}
+    for r in rows:
+        if r["status"] != "active":
+            other[r["status"]] = other.get(r["status"], 0) + 1
+    if other:
+        lines.append("Not active because: " + ", ".join(f"{k}: {v}" for k, v in sorted(other.items())))
+
+    # category blocks: runs of consecutive *active* IDs with the same category
+    # (missing IDs in between don't break a block)
+    blocks: dict[str, list[tuple[int, int]]] = {}
+    counts: dict[str, int] = {}
+    prev_cat = None
+    for r in active:
+        cat = r["category"] or "uncategorized"
+        counts[cat] = counts.get(cat, 0) + 1
+        if not str(r["id"]).isdigit():
+            continue
+        n = int(r["id"])
+        if cat == prev_cat:
+            a, _ = blocks[cat][-1]
+            blocks[cat][-1] = (a, n)
+        else:
+            blocks.setdefault(cat, []).append((n, n))
+        prev_cat = cat
+    lines.append("")
+    lines.append(f"Categories ({len(counts)}):")
+    w = max([len(c) for c in counts] + [8])
+    for cat, n in sorted(counts.items(), key=lambda kv: (blocks.get(kv[0], [(0, 0)])[0][0], kv[0])):
+        bl = blocks.get(cat, [])
+        span = f"   (spread over {bl[0][0]}-{bl[-1][1]})" if len(bl) > 3 else ""
+        lines.append(f"  {cat:<{w}}  {n:>6} textures   IDs: {_fmt_ranges(bl, 6)}{span}")
+    return "\n".join(lines)
+
+
+def run_scan(urls: list[str] | None, http: Http, args, item_re, renderer) -> int:
+    os.makedirs(args.out, exist_ok=True)
+    rows: list[dict] = []
+    workers = 1 if renderer else max(1, args.workers)
+    done = [0]
+
+    def run(batch):
+        with ThreadPoolExecutor(workers) as ex:
+            for row in ex.map(lambda u: scan_page(u, http, args, item_re, renderer), batch):
+                rows.append(row)
+                done[0] += 1
+                mark = "✓" if row["status"] == "active" else "·"
+                if row["status"] == "active" or done[0] % 50 == 0:
+                    log(f"{mark} {row['id']:>6}  {row['status']:<9} {row['category'][:25]:<25} {row['title'][:40]}")
+
+    if urls is not None:
+        log(f"scanning {len(urls)} pages ...\n")
+        run(urls)
+    else:
+        # open-ended: walk upwards from --scan-start until --scan-gap IDs in a row are missing
+        log(f"scanning from ID {args.scan_start} until {args.scan_gap} IDs in a row are missing ...\n")
+        n, last_active, batch_size = args.scan_start, args.scan_start - 1, max(20, workers * 10)
+        while n <= args.scan_max and n - last_active <= args.scan_gap:
+            batch_ids = list(range(n, n + batch_size))
+            start = len(rows)
+            run([args.item_url.format(base=args.base.rstrip("/"), id=i) for i in batch_ids])
+            for r in rows[start:]:
+                if r["status"] == "active" and str(r["id"]).isdigit():
+                    last_active = max(last_active, int(r["id"]))
+            n += batch_size
+
+    rows.sort(key=_id_key)
+    csv_path = os.path.join(args.out, "scan.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["id", "status", "category", "title", "url"])
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r[k] for k in w.fieldnames})
+    report = scan_report(rows)
+    with open(os.path.join(args.out, "scan_summary.txt"), "w", encoding="utf-8") as f:
+        f.write(report + "\n")
+    log("\n" + "=" * 70 + "\n" + report + "\n" + "=" * 70)
+    log(f"\nSaved: {csv_path}  and  scan_summary.txt")
+    log("Next: download from this list, e.g.\n"
+        f"  python theloader.py {args.base} --from-scan \"{csv_path}\" --only-category \"Stone\"")
+    return 0
+
+
+def load_scan(path: str, only_category: str | None) -> list[str]:
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = [r for r in csv.DictReader(f) if r["status"] == "active"]
+    if only_category:
+        rows = [r for r in rows if category_matches(r["category"], only_category)]
+    log(f"from scan: {len(rows)} active pages" + (f" in '{only_category}'" if only_category else ""))
+    return [r["url"] for r in rows]
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Download high-resolution images of a site, grouped by category.",
@@ -700,6 +863,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--follow", help="only follow non-item links whose path matches this regex while crawling")
     g.add_argument("--max-pages", type=int, default=5000, help="crawl limit (default 5000)")
     g.add_argument("--urls", help="text file with one item URL per line")
+    g = p.add_argument_group("scan (check which IDs exist before downloading)")
+    g.add_argument("--scan", action="store_true",
+                   help="only check which item pages exist and their categories; writes scan.csv + scan_summary.txt")
+    g.add_argument("--scan-start", type=int, default=1, help="first ID when scanning without --ids (default 1)")
+    g.add_argument("--scan-gap", type=int, default=500,
+                   help="without --ids: stop after this many missing IDs in a row (default 500)")
+    g.add_argument("--scan-max", type=int, default=1000000, help="never scan past this ID (default 1000000)")
+    g.add_argument("--from-scan", metavar="SCAN_CSV", help="download the active pages listed in a scan.csv")
+    g.add_argument("--only-category", metavar="NAMES",
+                   help="only these categories, comma separated, e.g. 'Stone,Concrete'")
     g = p.add_argument_group("what to keep")
     g.add_argument("--min-size", type=int, default=600, help="minimum pixels (default 600)")
     g.add_argument("--size-mode", choices=["min", "max"], default="min",
@@ -744,7 +917,11 @@ def main(argv=None) -> int:
     renderer = Renderer() if args.render else None
 
     try:
+        if args.scan and not (args.ids or args.urls or args.sitemap or args.crawl):
+            return run_scan(None, http, args, item_re, renderer)
         urls: list[str] = []
+        if args.from_scan:
+            urls += load_scan(args.from_scan, args.only_category)
         if args.ids:
             urls += discover_ids(args)
         if args.urls:
@@ -754,7 +931,7 @@ def main(argv=None) -> int:
             urls += discover_sitemap(http, args, item_re)
         if args.crawl:
             urls += discover_crawl(http, args, item_re, renderer)
-        if not (args.ids or args.urls or args.sitemap or args.crawl):
+        if not (args.ids or args.urls or args.sitemap or args.crawl or args.from_scan):
             log("No pages selected. Trying sitemap.xml first, then crawling ...")
             urls = discover_sitemap(http, args, item_re) or discover_crawl(http, args, item_re, renderer)
         urls = list(dict.fromkeys(urls))
@@ -763,6 +940,8 @@ def main(argv=None) -> int:
         if not urls:
             log("No item pages found. Check --item-pattern / --ids / --start.")
             return 1
+        if args.scan:
+            return run_scan(urls, http, args, item_re, renderer)
 
         manifest = None
         if not args.probe:
