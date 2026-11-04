@@ -7,12 +7,12 @@
 ```
 downloads/
   Concrete/
-    12_Rough Concrete/
-      concrete_diffuse.jpg   (2048x2048)
-      concrete_normal.png
+    12_Rough Concrete_1.jpg   (2048x2048)
+    12_Rough Concrete_2.png
+    13_Smooth Concrete.jpg
   Stone/
-    40_Sandstone/
-      sandstone.jpg          (4096x2048)
+    40_Sandstone.jpg          (4096x2048)
+    41_Marble.jpg
   manifest.csv               ← فهرست همه‌ی فایل‌ها: آدرس، ابعاد، صفحه‌ی منبع
 ```
 
@@ -91,7 +91,7 @@ python theloader.py https://YOUR-SITE.com --crawl
 | `--min-size 600` | حداقل ابعاد. پیش‌فرض: **ضلع کوچک‌تر** عکس باید حداقل ۶۰۰ پیکسل باشد |
 | `--size-mode max` | به‌جای ضلع کوچک‌تر، ضلع بزرگ‌تر را با حداقل مقایسه می‌کند |
 | `--best-only` | از هر تکسچر فقط بزرگ‌ترین عکس را نگه می‌دارد |
-| `--flat` | بدون زیرپوشه برای هر تکسچر: `Concrete/12_Rough Concrete_1.jpg` |
+| `--item-folders` | برای هر تکسچر یک زیرپوشه‌ی جدا بسازد. پیش‌فرض: همه‌ی تکسچرهای یک دسته در یک پوشه، مثل `Stone/40_Sandstone.jpg` |
 | `--out FOLDER` | پوشه‌ی ذخیره |
 | `--limit 20` | حداکثر تعداد صفحه‌ها (برای آزمایش) |
 | `--workers 4` | تعداد صفحه‌هایی که هم‌زمان پردازش می‌شوند |

@@ -634,7 +634,7 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
 
     cat_dir = safe_name(item.category)
     name = safe_name(f"{item.item_id}_{item.title}" if item.title else item.item_id or "item")
-    folder = os.path.join(args.out, cat_dir) if args.flat else os.path.join(args.out, cat_dir, name)
+    folder = os.path.join(args.out, cat_dir, name) if args.item_folders else os.path.join(args.out, cat_dir)
     for i, (final, w, h, c) in enumerate(big):
         data = download(http, final, url)
         if not data:
@@ -654,7 +654,7 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
         if ext == ".jpeg":
             ext = ".jpg"
         orig = safe_name(os.path.splitext(os.path.basename(urlparse(final).path))[0], 60)
-        fname = f"{name}_{i + 1}{ext}" if args.flat else f"{orig}{ext}"
+        fname = f"{orig}{ext}" if args.item_folders else (f"{name}{ext}" if len(big) == 1 else f"{name}_{i + 1}{ext}")
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, fname)
         k = 2
@@ -718,7 +718,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="regex of category link URLs used as a fallback")
     g = p.add_argument_group("output & network")
     g.add_argument("--out", default="downloads", help="output folder (default ./downloads)")
-    g.add_argument("--flat", action="store_true", help="no sub-folder per item: <out>/<category>/<id>_<title>_N.jpg")
+    g.add_argument("--item-folders", action="store_true",
+                   help="one sub-folder per item: <out>/<category>/<id>_<title>/<file>. "
+                        "Default: all images of a category in one folder: <out>/<category>/<id>_<title>.jpg")
+    g.add_argument("--flat", action="store_true", help=argparse.SUPPRESS)  # old option, now the default
     g.add_argument("--probe", action="store_true", help="only analyse the pages and print the result")
     g.add_argument("--workers", type=int, default=4, help="parallel pages (default 4)")
     g.add_argument("--delay", type=float, default=0.2, help="seconds to wait before each request (default 0.2)")
