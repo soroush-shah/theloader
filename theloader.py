@@ -4,7 +4,7 @@ theloader - download the high-resolution images of a website, grouped by
 the site's own categories.
 
 Built for texture sites whose items live at URLs like
-    https://example.com/texture/123
+    https://example.com/textures/123
 and which belong to categories such as "Concrete", "Stone", ...
 
 Pipeline:
@@ -684,16 +684,16 @@ def build_parser() -> argparse.ArgumentParser:
   # download textures 1..500
   python theloader.py https://example.com --ids 1-500
 
-  # find every /texture/N page automatically by crawling the site
+  # find every /textures/N page automatically by crawling the site
   python theloader.py https://example.com --crawl
 """)
     p.add_argument("base", help="site address, e.g. https://example.com")
     g = p.add_argument_group("which pages")
     g.add_argument("--ids", help="item IDs: '1-500' or '3,7,10-20'")
-    g.add_argument("--item-url", default="{base}/texture/{id}",
-                   help="item URL template for --ids (default: {base}/texture/{id})")
+    g.add_argument("--item-url", default="{base}/textures/{id}",
+                   help="item URL template for --ids (default: {base}/textures/{id})")
     g.add_argument("--item-pattern", default=r"/textures?/(?P<id>\d+)(?:[/-][^/?#]*)?/?$",
-                   help="regex that recognises an item page path (default: /texture/<N>, /textures/<N>, /texture/<N>-slug)")
+                   help="regex that recognises an item page path (default: /textures/<N>, also /texture/<N> and /textures/<N>-slug)")
     g.add_argument("--sitemap", nargs="?", const="auto", help="read item pages from sitemap.xml")
     g.add_argument("--crawl", action="store_true", help="crawl the site to find item pages")
     g.add_argument("--start", action="append", help="crawl start path(s), e.g. /textures (default /)")

@@ -2,7 +2,7 @@
 
 ابزاری برای دانلود **عکس‌های باکیفیت** یک سایت (مثل تکسچرها)، که هر عکس را **در پوشه‌ی دسته‌بندی خودش** ذخیره می‌کند.
 
-> A tool that downloads the high-resolution images of a website (e.g. textures at `/texture/<id>`) into folders named after the site's own categories.
+> A tool that downloads the high-resolution images of a website (e.g. textures at `/textures/<id>`) into folders named after the site's own categories.
 
 ```
 downloads/
@@ -96,7 +96,7 @@ python theloader.py https://YOUR-SITE.com --crawl
 | `--limit 20` | حداکثر تعداد صفحه‌ها (برای آزمایش) |
 | `--workers 4` | تعداد صفحه‌هایی که هم‌زمان پردازش می‌شوند |
 | `--delay 0.2` | مکث بین درخواست‌ها، تا به سرور فشار نیاید |
-| `--item-url` | الگوی آدرس صفحه‌ها. پیش‌فرض: `{base}/texture/{id}` |
+| `--item-url` | الگوی آدرس صفحه‌ها. پیش‌فرض: `{base}/textures/{id}` |
 | `--item-pattern` | الگوی regex برای تشخیص صفحه‌ی تکسچر |
 | `--render` | باز کردن صفحه با مرورگر واقعی، برای سایت‌هایی که با جاوااسکریپت ساخته شده‌اند (`pip install playwright`) |
 | `--cookies "..."` | برای صفحه‌هایی که ورود به حساب لازم دارند |
