@@ -515,7 +515,30 @@ def discover_crawl(http: Http, args, item_re, renderer) -> list[str]:
                 q.append(u)
         if pages % 10 == 0 or new_items:
             log(f"crawl: {pages} pages visited, {len(items)} item pages found (queue {len(q)})")
+        if args.limit and len(items) >= args.limit:
+            break
+        if not items and pages in (30, 150):
+            show_url_shapes(seen, base.netloc)
+    if not items:
+        show_url_shapes(seen, base.netloc)
     return list(dict.fromkeys(items))
+
+
+def show_url_shapes(urls, netloc: str, top: int = 20):
+    """Print the most common address shapes, to help find the right --item-pattern."""
+    from collections import Counter
+    shapes, example = Counter(), {}
+    for u in urls:
+        p = urlparse(u)
+        if p.netloc != netloc:
+            continue
+        shape = re.sub(r"\d+", "<N>", p.path) + ("?" + re.sub(r"=\d+", "=<N>", p.query) if p.query else "")
+        shapes[shape] += 1
+        example.setdefault(shape, u)
+    log("\n  No page matched --item-pattern yet. Most common address shapes on the site:")
+    for shape, n in shapes.most_common(top):
+        log(f"    {n:>5} x  {shape:<45} e.g. {example[shape]}")
+    log("  -> Send the line that looks like a texture page, or set --item-pattern / --ids accordingly.\n")
 
 
 def fetch_html(http: Http, url: str, renderer) -> str | None:
@@ -669,8 +692,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--ids", help="item IDs: '1-500' or '3,7,10-20'")
     g.add_argument("--item-url", default="{base}/texture/{id}",
                    help="item URL template for --ids (default: {base}/texture/{id})")
-    g.add_argument("--item-pattern", default=r"/texture/(?P<id>[^/?#]+)/?$",
-                   help="regex that recognises an item page path (default: /texture/<id>)")
+    g.add_argument("--item-pattern", default=r"/textures?/(?P<id>\d+)(?:[/-][^/?#]*)?/?$",
+                   help="regex that recognises an item page path (default: /texture/<N>, /textures/<N>, /texture/<N>-slug)")
     g.add_argument("--sitemap", nargs="?", const="auto", help="read item pages from sitemap.xml")
     g.add_argument("--crawl", action="store_true", help="crawl the site to find item pages")
     g.add_argument("--start", action="append", help="crawl start path(s), e.g. /textures (default /)")
