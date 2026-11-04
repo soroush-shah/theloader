@@ -235,18 +235,27 @@ def extract_category(soup: BeautifulSoup, page_url: str, args) -> str:
     return find_category(soup, page_url, args)[0]
 
 
-NAV_CLASS = re.compile(r"(^|[-_ ])(nav|navbar|menu|header|footer|mega)([-_ ]|$)", re.I)
+NAV_CLASS = re.compile(r"(^|[-_ ])(nav|navbar|navigation|menu|mega|footer)([-_ ]|$)", re.I)
+HEADER_CLASS = re.compile(r"(^|[-_ ])header([-_ ]|$)", re.I)
 
 
 def _in_navigation(el) -> bool:
-    """True if the element sits in the site menu / header / footer (same on every page)."""
+    """True if the element sits in the site menu / site header / footer (same on every page).
+
+    A <header> (or class "...-header") that contains the page title <h1> is the
+    item's own header (title + category), not the site header, so it is kept.
+    """
     for p in [el] + list(el.parents):
-        if getattr(p, "name", None) in ("nav", "header", "footer"):
+        name = getattr(p, "name", None)
+        if name in ("nav", "footer"):
             return True
-        if getattr(p, "attrs", None):
-            cls = " ".join(p.get("class", [])) + " " + (p.get("id") or "")
-            if NAV_CLASS.search(cls) or p.get("role") == "navigation":
-                return True
+        if not getattr(p, "attrs", None):
+            continue
+        cls = " ".join(p.get("class", [])) + " " + (p.get("id") or "")
+        if NAV_CLASS.search(cls) or p.get("role") == "navigation":
+            return True
+        if (name == "header" or HEADER_CLASS.search(cls)) and p.find("h1") is None:
+            return True
     return False
 
 
@@ -365,11 +374,43 @@ def find_category(soup: BeautifulSoup, page_url: str, args) -> tuple[str, str]:
                 and not _in_navigation(a):
             return a.get_text(" ", strip=True), f"category link {a['href']}"
 
-    # 7) meta tag article:section
+    # 7) category stored as data inside scripts (sites built with React / Next.js / Vue ...)
+    for sc in soup.find_all("script"):
+        txt = sc.string or ""
+        m = re.search(r'"(?:category|categoryName|category_name|categoryTitle)"\s*:\s*'
+                      r'(?:"([^"]{1,60})"|\{[^{}]*?"(?:name|title|label)"\s*:\s*"([^"]{1,60})")', txt)
+        if m:
+            return _clean_value(m.group(1) or m.group(2)), "data inside a <script>"
+
+    # 8) meta tag article:section
     m = soup.find("meta", attrs={"property": "article:section"})
     if m and m.get("content"):
         return m["content"], "meta article:section"
     return "uncategorized", "nothing found"
+
+
+def explain_missing_category(html: str, soup: BeautifulSoup, title: str):
+    """Print what the raw page contains around the word 'category', to help fix the settings."""
+    log("  ? category not found. What the page's HTML contains:")
+    hits = [m.start() for m in re.finditer(r"categor|دسته", html, re.I)]
+    if not hits:
+        log("    the word 'category' does not appear in the HTML at all.")
+        if title and title not in html:
+            log("    the title is not in the HTML either -> the page is built by JavaScript: add --render")
+        else:
+            log("    the category is probably added by JavaScript: try --render")
+        return
+    shown, last = 0, -10 ** 9
+    for pos in hits:
+        if pos - last < 400:   # same neighbourhood as the previous snippet
+            continue
+        last = pos
+        snippet = re.sub(r"\s+", " ", html[max(0, pos - 150): pos + 250])
+        log(f"    ...{snippet}...")
+        shown += 1
+        if shown >= 4:
+            break
+    log("    -> send these lines to get the right --category-selector")
 
 
 def _cat_from_crumbs(names: list[str]) -> str:
@@ -706,6 +747,8 @@ def process_item(url: str, http: Http, args, item_re, manifest: Manifest | None,
         log(f"  id       : {item.item_id}")
         log(f"  title    : {item.title}")
         log(f"  category : {item.category}   (found by: {cat_how})")
+        if item.category == "uncategorized":
+            explain_missing_category(html, soup, item.title)
         log(f"  {len(item.candidates)} image candidates on page:")
         for final, w, h, c in sorted(found, key=lambda f: -f[1] * f[2]):
             ok = "KEEP " if (final, w, h, c) in big else "small"
